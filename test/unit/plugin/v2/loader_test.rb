@@ -5,6 +5,10 @@ require_relative "../../../../lib/inspec/plugin/v2"
 
 require "train" # Needed for Train plugin testing
 
+class Inspec::Plugin::V2::Loader
+  public :detect_system_plugins
+end
+
 class PluginLoaderTests < Minitest::Test
 
   @@orig_home = Dir.home
@@ -243,5 +247,68 @@ class PluginLoaderTests < Minitest::Test
     require "train-test-fixture"
     assert_includes(Train::Plugins.registry.keys, "test-fixture", "After requiring the gem, the Train Registry should know the plugin is loaded")
     assert(reg.loaded_plugin?(plugin_name), "After requiring, InSpec Registry should know the the plugin is loaded")
+  end
+
+  REG_INST = Inspec::Plugin::V2::Registry.instance
+
+  def with_empty_registry
+    old_reg = REG_INST.registry.dup
+    REG_INST.registry.clear
+
+    yield
+  ensure
+    REG_INST.registry.replace old_reg
+  end
+
+  def using_bundler?
+    Gem::Specification.find_by_name("inspec")
+  rescue Gem::MissingSpecError
+    nil
+  end
+
+  def assert_detect_system_plugins(exp_keys, exp_err)
+    # rubocop:disable Style/HashSyntax
+    loader = Inspec::Plugin::V2::Loader.new(:omit_user_plugins => true,
+                                            :omit_bundles      => true,
+                                            :omit_core_plugins => true,
+                                            :omit_sys_plugins  => true)
+
+    assert_empty REG_INST.registry
+
+    yield loader
+
+    assert_output "", exp_err do
+      loader.detect_system_plugins
+    end
+
+    assert_equal exp_keys, REG_INST.registry.keys.sort
+  end
+
+  def test_detect_system_plugins
+    with_empty_registry do
+      exp = []
+      exp_err = "inspec gem not found, skipping detecting of system plugins\n"
+
+      assert_detect_system_plugins exp, exp_err do |loader|
+        def loader.find_inspec_gemspec(*)
+          nil
+        end
+      end
+    end
+  end
+
+  def test_detect_system_plugins_inspec
+    skip "not valid in this env" unless using_bundler?
+
+    with_empty_registry do
+      exp = %i{ train-aws train-habitat train-winrm} # TODO? is this right? or just non-empty?
+      exp_err = ""
+
+      assert_detect_system_plugins exp, exp_err do |loader|
+        def loader.find_inspec_gemspec(name, version)
+          super if name == "inspec"
+        end
+      end
+    end
   end
 end
